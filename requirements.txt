@@ -1,0 +1,11 @@
+# Core DL
+torch>=2.1,<3.0
+torchvision>=0.16,<1.0
+lightning>=2.1,<3.0
+
+# Data / ML utils
+pandas>=2.0,<3.0
+scikit-learn>=1.3,<2.0
+
+# Optional (для красивого логирования, не обязательно)
+# tensorboard>=2.15
