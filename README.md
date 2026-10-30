@@ -4,15 +4,15 @@
 
 ## Структура
 
-PyTourch Lightening/
-├── main.py           # точка входа
-├── data.py           # Dataset + LightningDataModule
-├── model.py          # CFG + LightningModel
-├── utils.py          # str2bool
-├── requirements.txt
-├── data/             # скачивается автоматически
-├── checkpoints/      # лучшие чекпоинты (создать заранее)
-└── models/           # финальный чекпоинт (создать заранее)
+PyTorch_Lightning/
+|-- main.py
+|-- data.py
+|-- model.py
+|-- utils.py
+|-- requirements.txt
+|-- data/
+|-- checkpoints/
+`-- models/
 
 ## Требования
 
