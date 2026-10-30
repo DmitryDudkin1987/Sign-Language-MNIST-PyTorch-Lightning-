@@ -3,7 +3,11 @@ from dataclasses import dataclass
 import torch
 from lightning import LightningModule
 from torch import nn
-from torch.nn import functional as F  # noqa: F401  (оставлен для совместимости)
+from torchmetrics.classification import (
+    MulticlassAccuracy,
+    MulticlassAUROC,
+    MulticlassFBetaScore,
+)
 
 
 @dataclass
@@ -11,7 +15,7 @@ class CFG:
     """Конфигурация обучения."""
 
     lr: float = 1e-3
-    epochs: int = 5
+    epochs: int = 30
     n_classes: int = 26
 
 
@@ -31,45 +35,41 @@ class LightningModel(LightningModule):
         self.dilation = 1
         self.n_classes = cfg.n_classes
 
+        # --- метрики ---
+        self.train_fbeta = MulticlassFBetaScore(
+            beta=2.0, num_classes=self.n_classes, average="macro"
+        )
+        self.val_fbeta = MulticlassFBetaScore(
+            beta=2.0, num_classes=self.n_classes, average="macro"
+        )
+        self.train_auroc = MulticlassAUROC(
+            num_classes=self.n_classes, average="weighted"
+        )
+        self.val_auroc = MulticlassAUROC(
+            num_classes=self.n_classes, average="weighted"
+        )
+        self.train_acc = MulticlassAccuracy(num_classes=self.n_classes)
+        self.val_acc = MulticlassAccuracy(num_classes=self.n_classes)
+
+        # --- сеть (без изменений) ---
         self.block1 = nn.Sequential(
-            # input=(batch, 1, 28, 28)
-            nn.Conv2d(
-                in_channels=1,
-                out_channels=8,
-                kernel_size=3,
-                padding=1,
-                stride=self.stride,
-                dilation=self.dilation,
-            ),
+            nn.Conv2d(1, 8, kernel_size=3, padding=1,
+                      stride=self.stride, dilation=self.dilation),
             nn.BatchNorm2d(8),
-            # (batch, 8, 28, 28)
             nn.AvgPool2d(2),
-            # (batch, 8, 14, 14)
             nn.ReLU(),
         )
-
         self.block2 = nn.Sequential(
-            nn.Conv2d(
-                in_channels=8,
-                out_channels=16,
-                kernel_size=3,
-                padding=1,
-                stride=self.stride,
-                dilation=self.dilation,
-            ),
+            nn.Conv2d(8, 16, kernel_size=3, padding=1,
+                      stride=self.stride, dilation=self.dilation),
             nn.BatchNorm2d(16),
-            # (batch, 16, 14, 14)
             nn.AvgPool2d(2),
-            # (batch, 16, 7, 7)
             nn.ReLU(),
         )
-
         self.lin1 = nn.Linear(in_features=16 * 7 * 7, out_features=100)
-        # (batch, 100)
         self.act1 = nn.LeakyReLU()
         self.drop1 = nn.Dropout(p=0.3)
         self.lin2 = nn.Linear(100, self.n_classes)
-        # (batch, 26)
 
         self.criterion = nn.CrossEntropyLoss()
 
@@ -80,8 +80,7 @@ class LightningModel(LightningModule):
         x = self.lin1(x)
         x = self.act1(x)
         x = self.drop1(x)
-        x = self.lin2(x)
-        return x
+        return self.lin2(x)
 
     def basic_step(self, batch, batch_idx, step: str):
         x, y = batch
@@ -89,38 +88,38 @@ class LightningModel(LightningModule):
         loss = self.criterion(logits, y)
 
         preds = logits.argmax(dim=-1)
-        acc = (preds == y).float().mean()
+        probs = torch.softmax(logits, dim=-1)
 
-        on_step = step == "train"
-        on_epoch = step != "train"
+        if step == "train":
+            self.log("train/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+            self.log("train/acc", self.train_acc(preds, y),
+                     on_step=False, on_epoch=True, prog_bar=True)
+            self.log("train/fbeta", self.train_fbeta(preds, y),
+                     on_step=False, on_epoch=True, prog_bar=True)
+            self.log("train/auroc", self.train_auroc(probs, y),
+                     on_step=False, on_epoch=True, prog_bar=True)
 
-        self.log(
-            f"{step}/loss",
-            loss,
-            on_step=on_step,
-            on_epoch=on_epoch,
-            prog_bar=on_step,
-        )
-        self.log(
-            f"{step}/acc",
-            acc,
-            on_step=on_step,
-            on_epoch=on_epoch,
-            prog_bar=True,
-        )
+        elif step == "valid":
+            self.log("valid/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+            self.log("valid/acc", self.val_acc(preds, y),
+                     on_step=False, on_epoch=True, prog_bar=True)
+            self.log("valid/fbeta", self.val_fbeta(preds, y),
+                     on_step=False, on_epoch=True, prog_bar=True)
+            self.log("valid/auroc", self.val_auroc(probs, y),
+                     on_step=False, on_epoch=True, prog_bar=True)
+
+        # Для test-ветки в примере логирования нет — можно добавить по аналогии,
+        # но чтобы поведение совпало с примером, оставляю как есть.
         return loss
 
     def training_step(self, batch, batch_idx):
-        loss = self.basic_step(batch, batch_idx, "train")
-        return loss
+        return self.basic_step(batch, batch_idx, "train")
 
     def validation_step(self, batch, batch_idx):
-        loss = self.basic_step(batch, batch_idx, "valid")
-        return loss
+        return self.basic_step(batch, batch_idx, "valid")
 
     def test_step(self, batch, batch_idx):
-        loss = self.basic_step(batch, batch_idx, "test")
-        return loss
+        return self.basic_step(batch, batch_idx, "test")
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -133,8 +132,8 @@ class LightningModel(LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "epoch",  # шаг планировщика раз в эпоху
+                "interval": "epoch",
                 "frequency": 1,
-                "monitor": None,  # для CosineAnnealingLR не нужен
+                "monitor": None,
             },
         }

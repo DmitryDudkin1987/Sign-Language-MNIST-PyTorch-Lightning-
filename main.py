@@ -10,6 +10,7 @@ import sys
 
 import torch
 from lightning import Trainer
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 
 from data import URL_TEST, URL_TRAIN, SignLanguageLightning
 from model import CFG, LightningModel
@@ -42,6 +43,19 @@ def main(fast_dev_run: bool) -> None:
         max_epochs=cfg.epochs,
         log_every_n_steps=1,
         fast_dev_run=fast_dev_run,
+        callbacks=[
+            EarlyStopping(
+                monitor="valid/loss",
+                patience=3,
+                verbose=False,
+            ),
+            ModelCheckpoint(
+                monitor="valid/loss",
+                dirpath="checkpoints/",
+                filename="best-{epoch}",
+                save_top_k=1,
+            ),
+        ],
     )
     trainer.fit(model, datamodule=datamodule)
     trainer.save_checkpoint("models/myconvnet_sign_lang.ckpt")
@@ -51,8 +65,8 @@ def main(fast_dev_run: bool) -> None:
         idx = random.randrange(len(datamodule.val_dataset))
         x, y = datamodule.val_dataset[idx]
 
-        logits = model(x.unsqueeze(0))  # (1, C, H, W)
-        probs = torch.softmax(logits, dim=1)[0]  # (C,)
+        logits = model(x.unsqueeze(0))              # (1, C, H, W)
+        probs = torch.softmax(logits, dim=1)[0]     # (C,)
         pred = logits.argmax(dim=1).item()
         conf = probs[pred].item()
 
